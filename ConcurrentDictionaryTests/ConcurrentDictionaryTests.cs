@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -17,10 +19,12 @@ namespace ConcurrentDictionaryTests
         class ImmutableData
         {
             internal static AtomicCounter AddCallsCount = new AtomicCounter();
+            internal static AtomicCounter InstancesCount = new AtomicCounter();
 
             public ImmutableData(int value)
             {
                 Value = value;
+                InstancesCount++;
             }
             public int Value { get; }
             public ImmutableData Add(ImmutableData other)
@@ -47,7 +51,9 @@ namespace ConcurrentDictionaryTests
             Assert.AreEqual(Loops - 1, sequentialAddCalls);
             PrintSummary<ImmutableData>(Console.Out, false, sequential.Value, sequentialAddCalls);
             ImmutableData.AddCallsCount.Reset();
+            Console.WriteLine(ImmutableData.InstancesCount);
 
+            ImmutableData.InstancesCount.Reset();
             var concurrent = TestConcurrent(
                 new ConcurrentDictionary<string, ImmutableData>(),
                 (dict, i) => dict.AddOrUpdate(Key, _ => new ImmutableData(i), (_, existing) => existing.Add(new ImmutableData(i))));
@@ -55,6 +61,7 @@ namespace ConcurrentDictionaryTests
             long concurrentAddCalls = ImmutableData.AddCallsCount.Value;
             PrintSummary<ImmutableData>(Console.Out, true, concurrent.Value, concurrentAddCalls);
             ImmutableData.AddCallsCount.Reset();
+            Console.WriteLine(ImmutableData.InstancesCount);
 
             Assert.AreEqual(sequential.Value, concurrent.Value);
             Assert.AreNotEqual(sequentialAddCalls, concurrentAddCalls);
@@ -67,16 +74,20 @@ namespace ConcurrentDictionaryTests
         class MutableData
         {
             internal static AtomicCounter AddCallsCount = new AtomicCounter();
+            internal static AtomicCounter InstancesCount = new AtomicCounter();
+
+            private int m_value;
 
             public MutableData(int value)
             {
-                Value = value;
+                m_value = value;
+                InstancesCount++;
             }
-            public int Value { get; private set; }
+            public int Value => m_value;
             public MutableData Add(MutableData other)
             {
                 AddCallsCount++;
-                Value += other.Value;
+                Interlocked.Add(ref m_value, other.m_value);
                 return this;
             }
             public override string ToString() => $"Value: {Value:N0}";
@@ -85,7 +96,7 @@ namespace ConcurrentDictionaryTests
         }
 
         [TestMethod]
-        public void TestMutableData_Fails_Plain()
+        public void TestMutableData_Fails_NoSpecialTreatment()
         {
             var sequential = TestSequential(
                  new ConcurrentDictionary<string, MutableData>(),
@@ -95,7 +106,9 @@ namespace ConcurrentDictionaryTests
             Assert.AreEqual(Loops - 1, sequentialAddCalls);
             PrintSummary<MutableData>(Console.Out, false, sequential.Value, sequentialAddCalls);
             MutableData.AddCallsCount.Reset();
+            Console.WriteLine(MutableData.InstancesCount);
 
+            MutableData.InstancesCount.Reset();
             var concurrent = TestConcurrent(
                 new ConcurrentDictionary<string, MutableData>(),
                 (dict, i) => dict.AddOrUpdate(Key, _ => new MutableData(i), (_, existing) => existing.Add(new MutableData(i))));
@@ -103,18 +116,7 @@ namespace ConcurrentDictionaryTests
             long concurrentAddCalls = MutableData.AddCallsCount.Value;
             PrintSummary<MutableData>(Console.Out, true, concurrent.Value, concurrentAddCalls);
             MutableData.AddCallsCount.Reset();
-
-            // We will observe more calls to `MutableData.Add()` than with the sequential case.
-            // This is due to contention on the `ConcurrentDictionary` instance. Multiple threads,
-            // will attempt to `AddOrUpdate()` simultaniously for the same key.
-            //
-
-            // Values are not equal because in the concurrent case, the `updateValueFactory` is called potentially multiple times
-            // due to multiple threads trying to update simultaneously. Since each "MutableData.Add()" operation updates the
-            // internal state of the instance, we essentially perform more "existing = existing + new" than we should, thus
-            // resulting in a larger value than in the (correct) sequential case.
-            //
-            // 
+            Console.WriteLine(MutableData.InstancesCount);
 
             // Incidentally, the following *could* actually turn out to be equal. But that is very unlikely.
             Assert.AreNotEqual(sequential.Value, concurrent.Value);
@@ -129,7 +131,7 @@ namespace ConcurrentDictionaryTests
                  (dict, i) => dict.AddOrUpdate(Key, _ => new Lazy<MutableData>(() => new MutableData(i)), (_, existing) =>
                  {
                      existing.Value.Add(new MutableData(i));
-                     return existing;
+                     return new Lazy<MutableData>(existing.Value);
                  }));
 
             long sequentialAddCalls = MutableData.AddCallsCount.Value;
@@ -142,25 +144,15 @@ namespace ConcurrentDictionaryTests
                 (dict, i) => dict.AddOrUpdate(Key, _ => new Lazy<MutableData>(() => new MutableData(i)), (_, existing) =>
                 {
                     existing.Value.Add(new MutableData(i));
-                    return existing;
+                    return new Lazy<MutableData>(existing.Value);
                 }));
 
             long concurrentAddCalls = MutableData.AddCallsCount.Value;
             PrintSummary<MutableData>(Console.Out, true, concurrent.Value.Value, concurrentAddCalls);
             MutableData.AddCallsCount.Reset();
 
-            // TODO: Argument ist probably *WRONG*:
-            // The Lazy<> trick only works in the context of "GetOrAdd()" but not when using "AddOrUpdate()".
-            // The reason is, that the `updateValueFactory` is still called multiple times due to multiple threads
-            // calling it simultaneously. Again, since each call to "MutableData.Add()" updates the internal
-            // state, we get other values than expected.
-            // TODO: Why is the value *smaller* here?
-            // In other words: Lazy<> is not a replacement for a lock or mutex when the value already *exists*.
-            // It only prevents multiple creations of the value (hence why it works with GetOrAdd()).
-            // There must be a way that prevents the `updateValueFactory` from being called multiple times.
-
             Assert.AreNotEqual(sequential.Value.Value, concurrent.Value.Value);
-            Assert.AreEqual(sequentialAddCalls, concurrentAddCalls);
+            Assert.AreNotEqual(sequentialAddCalls, concurrentAddCalls);
         }
 
         [TestMethod]
@@ -171,7 +163,7 @@ namespace ConcurrentDictionaryTests
                  (dict, i) => dict.AddOrUpdate(Key, _ => new EqualitySupportLazy<MutableData>(() => new MutableData(i)), (_, existing) =>
                  {
                      existing.Value.Add(new MutableData(i));
-                     return existing;
+                     return new EqualitySupportLazy<MutableData>(existing.Value);
                  }));
 
             long sequentialAddCalls = MutableData.AddCallsCount.Value;
@@ -184,7 +176,7 @@ namespace ConcurrentDictionaryTests
                 (dict, i) => dict.AddOrUpdate(Key, _ => new EqualitySupportLazy<MutableData>(() => new MutableData(i)), (_, existing) =>
                 {
                     existing.Value.Add(new MutableData(i));
-                    return existing;
+                    return new EqualitySupportLazy<MutableData>(existing.Value);
                 }));
 
             long concurrentAddCalls = MutableData.AddCallsCount.Value;
@@ -239,6 +231,64 @@ namespace ConcurrentDictionaryTests
             // AddOrUpdate() operation.
 
             Assert.AreNotEqual(sequential.Value, concurrent.Value);
+            Assert.AreNotEqual(sequentialAddCalls, concurrentAddCalls);
+        }
+
+        // --------------------------------------------------------------------------------
+        // Mutable Advanced
+        // --------------------------------------------------------------------------------
+
+        class MyValue
+        {
+            private readonly object m_lock = new object();
+            private readonly List<string> m_entries = new List<string>();
+            public IReadOnlyList<string> Entries => m_entries;
+            public void AddEntry(string str)
+            {
+                lock (m_lock)
+                {
+                    if (!m_entries.Contains(str))
+                    {
+                        m_entries.Add(str);
+                    }
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestAdvancedMutableData_Success()
+        {
+            object l = new object();
+
+            var sequential = TestSequential(
+                new ConcurrentDictionary<string, List<int>>(),
+                (dict, i) => dict.AddOrUpdate(Key, _ => new List<int>(), (k, existing) =>
+                {
+                    lock (l)
+                    {
+                        if (!existing.Contains(i))
+                        {
+                            existing.Add(i);
+                        }
+                        return existing;
+                    }
+                }));
+
+            var concurrent = TestSequential(
+                new ConcurrentDictionary<string, List<int>>(),
+                (dict, i) => dict.AddOrUpdate(Key, _ => new List<int>(), (k, existing) =>
+                {
+                    lock (l)
+                    {
+                        if (!existing.Contains(i))
+                        {
+                            existing.Add(i);
+                        }
+                    }
+                    return existing;
+                }));
+
+            CollectionAssert.AreEquivalent(sequential, concurrent);
         }
 
         // --------------------------------------------------------------------------------
@@ -247,6 +297,7 @@ namespace ConcurrentDictionaryTests
 
         class EqualitySupportLazy<T> : Lazy<T>, IEquatable<EqualitySupportLazy<T>>
         {
+            public EqualitySupportLazy(T value) : base(value) { }
             public EqualitySupportLazy(Func<T> valueFactory) : base(valueFactory) { }
             public override bool Equals(object obj)
             {
@@ -274,7 +325,7 @@ namespace ConcurrentDictionaryTests
         {
             tw.Write(typeof(T).Name);
             tw.Write(" ");
-            tw.Write(concurrent ? " CONCURRENT " : " SEQUNETIAL ");
+            tw.Write(concurrent ? " CONCURRENT " : " SEQUENTIAL ");
             tw.WriteLine();
             tw.Write("\t Value: ");
             tw.Write(value.ToString("N0"));
