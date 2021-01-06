@@ -1,11 +1,16 @@
-﻿# Introduction 
+﻿
+## Introduction 
 
 It is important to understand the data structures you are using. That sounds like
 being obvious, but sometimes it is not as easy as one might think. That does include
-things like time complexity, general usage guidelines and pros and cons, but also
+things like time complexity ("big O-notation"), general usage guidelines and pros and cons, but also
 more subtle things - especially when concurrent usage comes into play. While
-the missed time complexity and other traits may "only" cost you performance, others
+missed time complexity and other traits may "only" cost you performance, others
 will cause correctness issues that are hard to find.
+
+They say reasoning about correctness in multi-threaded or concurrent scenarios is hard.
+And it is, that is why existing and tested data structures that promise simple solutions
+are so appealing.
 
 One data structure that is both appealing and, for uninitiated, hideous is the
 [`System.Collections.Concurrent.ConcurrentDictionary`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2?view=net-5.0)
@@ -15,28 +20,43 @@ It is very much appealing because it looks like it allows simple concurrent use
 of a "dictionary" in a multi-threaded context without the need to explicitly lock
 access to it.
 
-While this is in general true, there is more to it than meets the eye. As usual,
-all this potential issues are documented, but in day and age of copy/paste coding,
-sometimes forgotten.
+While this is in general true, there is more to it than meets the eye. As a general
+rule of thumb, such data structures protect their _own_ integrity and invariants.
+Such is true for `ConcurrentDictionary<>` as well, but they do _not_ protect the
+invariants of the data they are holding. In this case the entries of the dictionary,
+more specifically the _keys_ and _values_.
 
-In this article we want to explore the [`AddOrUpdate()`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate?view=net-5.0) method. We will see similar issues that are already called out upon using `GetOrAdd()`,
-and you can find them by binging Google using "ConcurrentDictionary GetOrAdd Lazy", for example.
+In this article I want to explore the [`AddOrUpdate()`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate?view=net-5.0) overloads in particular.
+There are similar issues here that are already called out upon using `GetOrAdd()`,
+and you can find them by binging Google using "ConcurrentDictionary GetOrAdd Lazy".
 
-Let's start by looking into how `AddOrUpdate()` operates internally (see https://source.dot.net/#System.Collections.Concurrent/System/Collections/Concurrent/ConcurrentDictionary.cs,2e5ef5704344a309, all overloads are equivalent in that respect).
+For the following overload of `AddOrUpdate()` is assumed, the other overloads are similar regarding
+the behavior and issues in this article:
 
+```
+AddOrUpdate(
+    TKey key,
+    Func<TKey,TValue> addValueFactory,
+    Func<TKey,TValue,TValue> updateValueFactory)
+```
+
+Note that for the sake of this article the term "calls `updateValueFactory` method" means
+invoking the `updateValueFactory` delegate and thus ultimately the code that it calls.
+
+Let's start by looking into how `AddOrUpdate()` operates [internally](https://source.dot.net/#System.Collections.Concurrent/System/Collections/Concurrent/ConcurrentDictionary.cs,2e5ef5704344a309).
 The following steps are performed repeatedly until one succeeds.
 There are two cases to consider: (a) the entry already exists, (b) it does not.
 
 1. If the entry does not exist, the equivalent of `TryAdd()` is attempted.
 
-  1.1. If that succeeds, `AddOrUpdate()` is complete. 
+1.1. If that succeeds, `AddOrUpdate()` is complete. 
 
-  1.2. If it fails, another thread has concurrently created it and the
-       current one loops and then attempts to update the existing entry.
+1.2. If it fails, another thread has concurrently created it and the
+     current one loops and then attempts to update the existing entry.
 
 2. If the entry does exist, the current value of it is stored as "oldValue".
 
-2.1. Then the `updateValueFactory` method is called and the value is stored as "newValue".
+2.1. Then `updateValueFactory` is called and the value is stored as "newValue".
 
 2.2. For the key a lock is acquired. This lock is not distinct for each key - that would be
      quite wasteful for large dictionaries - but each key belongs to a bucket and each bucket
@@ -61,7 +81,7 @@ There are two cases to consider: (a) the entry already exists, (b) it does not.
 The key takeaway is the following:
 
 The actual update of the entry's value is done holding a lock, but only so to protect the
-internal state of the ConcurrentDictionary. The `updateValueFactory` method is *not* called
+internal state of the dictionary instance itself. The `updateValueFactory` method is *not* called
 holding this lock. Since the whole procedure could be executed many times for the same key and 
 the same `AddOrUpdate()` call site - due to contention of multiple threads executing in parallel,
 the `updateValueFactory` method could be called multiple times before the resulting value is
@@ -81,6 +101,13 @@ If the code executed by `updateValueFactory` has side effects, that has to be co
 Or in other words, you cannot rely on the `updateValueFactory` method being called exactly
 once for reach `AddOrUpdate()` call.
 
+What about the `addValueFactory`?
+As can be seen by the documentation citation above, the `addValueFactory` method could also
+be called multiple times for a single `AddOrUpdate()` call. We won't look at this issue here
+in particular. For once, the basic problems (immutable, mutable values) are the same as
+with the `updateValueFactory` and also because issues there are also explained with the 
+various material about `GetOrAdd()` on the Internet.
+
 Another thing to note is that the way of checking to values for equality should be well defined
 (see 2.3.1 above), because that is how `ConcurrentDictionary<>` decides if two values are equal.
 If you simply use default `Object.Equals()` for a reference type (`class`), then of course only
@@ -89,31 +116,18 @@ use a value type as a value, than equality will be defined by "value equality", 
 types (`struct`) you should probably still overwrite `Equals()`, and if only for
 [performance reasons](https://devblogs.microsoft.com/premier-developer/performance-implications-of-default-struct-equality-in-c/).
 
-This is point is nothing to be underestimated. It constitutes a fundamental difference regarding
-the `System.Collections.Generic.Dictionary<>` class, which only requires equality and hash code
-being "useful" for keys, not values.
+This is nothing to be underestimated. It constitutes a fundamental difference regarding
+the `System.Collections.Generic.Dictionary<>` class, which only requires equality (and hash code)
+being "correct" for keys, not values. We will revisit this in the following, but it is only
+aspect.
 
-All that could scare you away from using `ConcurrentDictionary<>` right there! And frankly, sometimes it should.
-Because in some cases, especially when contention on the dictionary is not too high (you need to measure
-this for your particular case!), using a regular `Dictionary<>` with an explicit lock might still
-be the better case.
-But on the other hand, once you understand what the above implies and what it means for your dictionary
-values, it is not that hard either.
+The code for this article is available on [Github](https://github.com/cklutz/ConcurrentDictionaryTests)
+in the form of Unit Tests. To fully understand, you should also look at the output (`Console.Out`) of
+each test, as it includes additional information.
 
+So let's delve into details and see how it goes. 
 
-So let's delve into details and see how it goes. The code for this article is available on
-[Github](https://github.com/cklutz/ConcurrentDictionaryTests) in the form of Unit Tests.
-To fully understand, you should also look at the output (`Console.Out`) of each test,
-as it includes additional information.
-
-**What about the `addValueFactory`?**
-As can be seen by the documentation citation above, the `addValueFactory` method could also
-be called multiple times for a single `AddOrUpdate()` call. We won't look at this issue here
-in particular. For once, the basic problems (immutable, mutable values) are the same as
-with the `updateValueFactory` and also because issues there are also explained with the 
-various material about `GetOrAdd()` on the Internet.
-
-# Immutable Data
+## Immutable Data
 
 Immutable data (structures) and multi threading mix well. There's quite some information on this
 topic on the Internet and searching will yield a multitude of useful information. Thus we'll not
@@ -261,7 +275,7 @@ Some observations:
   The results of the "excess" `updateValueFactory` calls have been discarded and didn't
   change the overall result because the actual value of the entry is not affected by them.
 
-# Mutable Data
+## Mutable Data
 
 Things could be wonderful, if there were no mutable data. So in the following let's see
 how that goes and would approaches could be attempted and why the ultimately fail.
@@ -376,7 +390,7 @@ variation of `_ => new MutableData(i)`. In the end we seek to demonstrate that t
 and it doesn't really matter in which way they are. More so, if we would find a way to make using
 mutable data correct, it should work in either way anyway.
 
-## The Lazy-Trick
+### The Lazy-Trick
 
 As already mentioned in the introduction, there is this so called "Lazy-Trick" when using the
 `GetOrAdd()` method to prevent the `addValueFactory` from being called multiple times.
@@ -461,7 +475,7 @@ think about writing the `updateValueFactory` to return the same `Lazy` instance:
 That also doesn't work because we are still mutating the single `MutableData` instance; whether that is
 reference by the same or different `Lazy` instances is irrelevant.
 
-## Lazy with custom equality
+### Lazy with custom equality
 
 By now it should be clear that this probably leads nowhere, but for the sake of the argument let's see what
 happens when we would use a Lazy-type that uses the wrapped object's equality instead. For this we'd first need
@@ -545,7 +559,7 @@ place in conjunction with the `ConcurrentDictionary<>` type, but only in the con
 _initially creating_ a value. May that be during `GetOrAdd()` or the `addValueFactory`
 call in the `AddOrUpdate()` case.
 
-## Explicit Locking inside the updateValueFactory
+### Explicit Locking inside the updateValueFactory
 
 One could attempt to lock the logic inside `updateValueFactory` against multiple concurrent
 invocations.
@@ -606,23 +620,10 @@ Why does this not work? Because the lock _inside_ the `updateValueFactory` can n
 from running multiple times for the same `AddOrUpdate()` call. It could protect some sort of
 invariant inside the `MutableData` instance, but cannot help otherwise.
 
-# Conclusion
+### Making it work
 
-So where does that leave us?
-
-One takeaway is that if you have an immutable data structure or value type as value, you're basically
-out of the woods. There are some potential issues with performance, since multiple (unnecessary)
-calls to `addValueFactory` or `updateValueFactory` can and will happen, if concurrency / contention
-is high.
-
-There is not much to say here, except measure and try out different approaches if necessary. The
-`Lazy<>` approach could help for the `addValueFactory` part.
-
-If you have an mutable data type to use as value you should probably not be using a `ConcurrentDictionary<>`,
-unless you only use `GetOrAdd()`, `TryRemove()`, etc. and don't update entries. Depending on how exactly
-your value mutates it might be possible to still use `AddOrUpdate()`.
-
-For example, consider this:
+For example consider a value of type `List<int>`, obviously that type is mutable. When we add
+new values to the list it changes the current instance itself.
 
 ```
 [TestMethod]
@@ -632,34 +633,109 @@ public void TestAdvancedMutableData_Success()
 
     var sequential = TestSequential(
         new ConcurrentDictionary<string, List<int>>(),
-        (dict, i) => dict.AddOrUpdate(Key, _ => new List<int>(), (k, existing) =>
-        {
-            lock (l)
+        (dict, i) => dict.AddOrUpdate(Key,
+            _ => new List<int>(),
+            (_, existing) =>
             {
-                if (!existing.Contains(i))
+                lock (l)
                 {
-                    existing.Add(i);
+                    if (!existing.Contains(i))
+                    {
+                        existing.Add(i);
+                    }
+                    return existing;
                 }
-                return existing;
-            }
-        }));
+            }));
 
-    var concurrent = TestSequential(
+    var concurrent = TestConcurrent(
         new ConcurrentDictionary<string, List<int>>(),
-        (dict, i) => dict.AddOrUpdate(Key, _ => new List<int>(), (k, existing) =>
-        {
-            lock (l)
+        (dict, i) => dict.AddOrUpdate(Key,
+            _ => new List<int>(),
+            (_, existing) =>
             {
-                if (!existing.Contains(i))
+                lock (l)
                 {
-                    existing.Add(i);
+                    if (!existing.Contains(i))
+                    {
+                        existing.Add(i);
+                    }
+                    return existing;
                 }
-            }
-            return existing;
-        }));
+            }));
 
     CollectionAssert.AreEquivalent(sequential, concurrent);
 }
 ```
 
-This does work. However
+This shows, that using specific measures, calling `updateValueFactory` multiple times can of course 
+yields correct results. But only because we actively did something to help it. And that is the key
+here: there is no _universal_ approach to make mutable data work in the `AddOrUpdate()` scenario.
+You have to find a way specific to your particular case.
+
+And just to emphasis this point, look what happens if we'd used an immutable data type instead of
+`List<int>`, `ImmutableList<int>`.
+
+```
+[TestMethod]
+public void TestAdvancedImmutableData_Success()
+{
+    object l = new object();
+
+    var sequential = TestSequential(
+        new ConcurrentDictionary<string, ImmutableList<int>>(),
+        (dict, i) => dict.AddOrUpdate(Key,
+            _ => ImmutableList<int>.Empty, 
+            (_, existing) => existing.Add(i)));
+
+    var concurrent = TestConcurrent(
+        new ConcurrentDictionary<string, ImmutableList<int>>(),
+        (dict, i) => dict.AddOrUpdate(Key, 
+            _ => ImmutableList<int>.Empty,
+            (_, existing) => existing.Add(i)));
+
+    CollectionAssert.AreEquivalent(sequential, concurrent);
+}
+```
+
+Since `ImmutableList<>.Add()` does not add the new element to existing instance, but creates
+a new one, it does not matter how often `updateValueFactory` is called.
+
+## Conclusion
+
+So where does that leave us?
+
+One takeaway is that if you have an immutable data structure or value types as value, you're basically
+out of the woods.
+
+If mutable data / types are required, extra precaution is needed to keep things correct. How exactly that
+works and if it is feasible at all depends on the actual specific case and there is general solution.
+To make things even more interesting, using a `ConcurrentDictionary<>` still works nicely with mutable
+values, if you only ever get or add (`ConcurrentDictionary<>[TKey key]`, `GetOrAdd()`, `TryAdd`),
+remove (`TryRemove()`) or iterate existing entries, but never update them. Why? Because then you really
+treat them as immutable! At least from the point of view of the `ConcurrentDictionary<>`. But this is
+of course rather dangerous. A future maintainer might innocently update values (`AddOrUpdate()` or
+`TryUpdate()``) values in the dictionary and things start to break.
+
+Considering all the effort and correctness reasoning required for mutable values, and preventing brittle
+code for future maintenance - even with immutable values - it might worth considering using a plain
+`System.Collections.Generic.Dictionary<>` with explicit locking instead. Then go with that until
+measurement and profiling have proven this to be bottleneck for your scenario.
+
+In either case, there are potential issues with performance, since multiple (unnecessary) calls to `updateValueFactory`
+or `addValueFactory` can and will happen. Whether that is an issue for your scenario depends on how expensive
+these extra calls are and how often they generally will happen. The frequency of such extra calls is
+governed by the level of concurrency and contention that may arise from it. As always in such cases there
+is no universal answer and you have to measure and profile common use cases to find out. Potential problems
+in this regard can still be addressed using value wrapped in `Lazy<>`. As shown above this does not help
+with the issues of mutable data, but can reduce or prevent extra (expensive) calls. Wrapping a value into
+`Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes (64 bit; it uses
+some more until the value is first requested for the `valueFactory` delegate and some internal state, but
+that will be subject to GC when the value has been requested). If you have literally millions of values
+in your dictionary that might add up, but again: profile and measure before drawing conclusions here.
+
+As so often in software development there seldom is a universal right choice and such is the case here
+as well. This article thus attempted to outline some of the issues involved and give some guidance and
+hints. As always YMMV.
+
+
+
