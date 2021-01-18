@@ -3,7 +3,8 @@
 
 It is important to understand the data structures you are using. That sounds like
 being obvious, but sometimes it is not as easy as one might think. That does include
-things like time complexity ("big O-notation"), general usage guidelines and pros and cons, but also
+things like time complexity ("big O-notation"), general usage guidelines, pros and cons
+in comparison with related data structures or differences in implementations, but also
 more subtle things - especially when concurrent usage comes into play. While
 missed time complexity and other traits may "only" cost you performance, others
 will cause correctness issues that are hard to find.
