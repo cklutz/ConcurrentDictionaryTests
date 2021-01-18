@@ -1,19 +1,17 @@
-﻿
 ## Introduction 
 
 It is important to understand the data structures you are using. That sounds like
-being obvious, but sometimes it is not as easy as one might think. That does include
+being obvious, but can be quite challenging. Such understanding includes 
 things like time complexity ("big O-notation"), general usage guidelines, pros and cons
-in comparison with related data structures or differences in implementations, but also
+in comparison with related data structures, or differences in implementations, but also
 more subtle things - especially when concurrent usage comes into play. While
 missed time complexity and other traits may "only" cost you performance, others
 will cause correctness issues that are hard to find.
 
-They say reasoning about correctness in multi-threaded or concurrent scenarios is hard.
-And it is, that is why existing and tested data structures that promise simple solutions
-are so appealing.
+Reasoning about correctness in multi-threaded or concurrent scenarios is hard.
+That is why existing and tested data structures that promise simple solutions are so appealing.
 
-One data structure that is both appealing and, for uninitiated, hideous is the
+One data structure that is both appealing and, if not fully understood, hideous is the
 [`System.Collections.Concurrent.ConcurrentDictionary`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2?view=net-5.0)
 class.
 
@@ -715,7 +713,7 @@ values, if you only ever get or add (`ConcurrentDictionary<>[TKey key]`, `GetOrA
 remove (`TryRemove()`) or iterate existing entries, but never update them. Why? Because then you really
 treat them as immutable! At least from the point of view of the `ConcurrentDictionary<>`. But this is
 of course rather dangerous. A future maintainer might innocently update values (`AddOrUpdate()` or
-`TryUpdate()``) values in the dictionary and things start to break.
+`TryUpdate()`) values in the dictionary and things start to break.
 
 Considering all the effort and correctness reasoning required for mutable values, and preventing brittle
 code for future maintenance - even with immutable values - it might worth considering using a plain
