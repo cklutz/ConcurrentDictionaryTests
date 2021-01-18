@@ -19,7 +19,7 @@ It is very much appealing because it looks like it allows simple concurrent use
 of a "dictionary" in a multi-threaded context without the need to explicitly lock
 access to it.
 
-While this is in general true, there is more to it than meets the eye. As a general
+While this is true in principle, there is more to it than meets the eye. As a general
 rule of thumb, such data structures protect their _own_ integrity and invariants.
 Such is true for `ConcurrentDictionary<>` as well, but they do _not_ protect the
 invariants of the data they are holding. In this case the entries of the dictionary,
@@ -29,8 +29,8 @@ In this article I want to explore the [`AddOrUpdate()`](https://docs.microsoft.c
 There are similar issues here that are already called out upon using `GetOrAdd()`,
 and you can find them by binging Google using "ConcurrentDictionary GetOrAdd Lazy".
 
-For the following overload of `AddOrUpdate()` is assumed, the other overloads are similar regarding
-the behavior and issues in this article:
+In the following, I'm restricting myself to the following `AddOrUpdate()` overload,
+the other overloads are similar regarding the behavior and issues in this article:
 
 ```
 AddOrUpdate(
@@ -43,34 +43,36 @@ Note that for the sake of this article the term "calls `updateValueFactory` meth
 invoking the `updateValueFactory` delegate and thus ultimately the code that it calls.
 
 Let's start by looking into how `AddOrUpdate()` operates [internally](https://source.dot.net/#System.Collections.Concurrent/System/Collections/Concurrent/ConcurrentDictionary.cs,2e5ef5704344a309).
-The following steps are performed repeatedly until one succeeds.
-There are two cases to consider: (a) the entry already exists, (b) it does not.
+The following steps are performed repeatedly until one succeeds (or an exception occurrs).
+There are two cases to consider: either the entry already exists, or it does not.
 
 1. If the entry does not exist, the equivalent of `TryAdd()` is attempted.
 
 1.1. If that succeeds, `AddOrUpdate()` is complete. 
 
 1.2. If it fails, another thread has concurrently created it and the
-     current one loops and then attempts to update the existing entry.
+     current thread loops and then attempts to update the existing entry,
+     ending up the following case.
 
 2. If the entry does exist, the current value of it is stored as "oldValue".
 
-2.1. Then `updateValueFactory` is called and the value is stored as "newValue".
+2.1. Then `updateValueFactory` is invoked and the resulting value is stored as "newValue".
 
 2.2. For the key a lock is acquired. This lock is not distinct for each key - that would be
-     quite wasteful for large dictionaries - but each key belongs to a bucket and each bucket
-     has a lock. That ensures at least some concurrency when actually updating entries, as not
-     the complete dictionary is locked, but only "parts" of it (depending on the actual keys
-     being accessed simultaneously).
+     quite wasteful for large dictionaries. As with most dictionary implementations a key
+     belongs to a bucket and each bucket has its own lock. That ensures at least some
+     concurrency when actually updating entries, as not the complete dictionary is locked,
+     but only certain ranges of entries (depending on how keys that are being handled
+     simultaneously are distributed).
 
-2.3. Holding the lock, the actual entry for the key is looked up (again). Now the value of that
+2.3. Holding the lock, the actual entry for the key is looked up again. Now the value of that
      entry is compared against "oldValue".
 
-2.3.1. If the values do not match (by virtue of
-       `EqualityComparer<TValue>.Default`), another thread has concurrently modified the entry,
-       and this thread has to retry from the beginning. Note that it is imported to not simply
-       restart at 2. or 2.1. Because in the meantime the entry could have been removed by
-       another thread, so that case 1. could be the right thing to attempt next.
+2.3.1. If the values do not match (by virtue of `EqualityComparer<TValue>.Default`), another
+       thread has concurrently modified the entry, and this thread has to retry from the beginning.
+       Note that it is imported to not simply restart at step 2. or step 2.1. Because in the
+       meantime the entry could have been removed by another thread, so that step 1. would be
+       the right thing to attempt next.
 
 2.3.2. If the values do match, then no concurrent modification has happened and it is safe to
        replace the current value of the entry (again, which still is "oldValue") with "newValue".
@@ -80,11 +82,13 @@ There are two cases to consider: (a) the entry already exists, (b) it does not.
 The key takeaway is the following:
 
 The actual update of the entry's value is done holding a lock, but only so to protect the
-internal state of the dictionary instance itself. The `updateValueFactory` method is *not* called
-holding this lock. Since the whole procedure could be executed many times for the same key and 
-the same `AddOrUpdate()` call site - due to contention of multiple threads executing in parallel,
-the `updateValueFactory` method could be called multiple times before the resulting value is
-actually inserted (or added) into the dictionary.
+internal state of the dictionary instance itself. The `updateValueFactory` delegate is *not* invoked
+holding this lock.
+
+Since the whole procedure could be executed many times for the same key and the same `AddOrUpdate()`
+call site - due to contention of multiple threads executing in parallel, the `updateValueFactory`
+delegate could be invoked multiple times before the resulting value is actually inserted (or added)
+into the dictionary.
 
 This is spelled out in the "Remarks" section of the [`AddOrUpdate()`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate?view=net-5.0) documentation:
 
@@ -96,29 +100,28 @@ This is spelled out in the "Remarks" section of the [`AddOrUpdate()`](https://do
 > from executing unknown code under a lock. Therefore, AddOrUpdate is not atomic with regards to all other operations
 > on the ConcurrentDictionary<TKey, TValue> class.
 
-If the code executed by `updateValueFactory` has side effects, that has to be considered.
-Or in other words, you cannot rely on the `updateValueFactory` method being called exactly
-once for reach `AddOrUpdate()` call.
+If the code executed by the `updateValueFactory` delegate has side effects, that has to be considered.
+Or in other words, you cannot rely on the `updateValueFactory` delegate being invoked exactly once for
+each `AddOrUpdate()` call.
 
 What about the `addValueFactory`?
-As can be seen by the documentation citation above, the `addValueFactory` method could also
-be called multiple times for a single `AddOrUpdate()` call. We won't look at this issue here
-in particular. For once, the basic problems (immutable, mutable values) are the same as
-with the `updateValueFactory` and also because issues there are also explained with the 
+As can be seen by the documentation citation above, the `addValueFactory` delegate could also
+be invoked multiple times for a single `AddOrUpdate()` call. We won't look at this issue here
+in particular. For once, the basic problems are the same as with the `updateValueFactory` and
+also because issues there are also explained with the 
 various material about `GetOrAdd()` on the Internet.
 
-Another thing to note is that the way of checking to values for equality should be well defined
-(see 2.3.1 above), because that is how `ConcurrentDictionary<>` decides if two values are equal.
+Another thing to note is that the way of checking two values for equality should be well defined
+(see 2.3.1 above), because that is how `ConcurrentDictionary<>` decides if a values has changed.
 If you simply use default `Object.Equals()` for a reference type (`class`), then of course only
 the exact same instance will count as being equal. Which may or not may be what you want. If you
-use a value type as a value, than equality will be defined by "value equality", but for custom
+use a value type as a value, then equality will be defined by "value equality", but for custom
 types (`struct`) you should probably still overwrite `Equals()`, and if only for
 [performance reasons](https://devblogs.microsoft.com/premier-developer/performance-implications-of-default-struct-equality-in-c/).
 
-This is nothing to be underestimated. It constitutes a fundamental difference regarding
+This is nothing to be underestimate. It constitutes a fundamental difference regarding
 the `System.Collections.Generic.Dictionary<>` class, which only requires equality (and hash code)
-being "correct" for keys, not values. We will revisit this in the following, but it is only
-aspect.
+being "correct" for keys, not values.
 
 The code for this article is available on [Github](https://github.com/cklutz/ConcurrentDictionaryTests)
 in the form of Unit Tests. To fully understand, you should also look at the output (`Console.Out`) of
