@@ -295,16 +295,18 @@ Some observations:
   (=> immutability of the value's type).
 
 There are some performance considerations here, which we'll shortly tackle in the
-conclusion of this article, but generally everything is fine here.
+conclusion of this article, but generally everything is fine.
 
 If that would be all there is to it, things would be great an live would be easy.
 
 ## Mutable Data
 
-Things could be wonderful, if there were no mutable data. So in the following let's see
-how that goes and would approaches could be attempted and why the ultimately fail.
+Things could be wonderful, if there were no mutable data/types. But there are.
 
-For all of the following we use the following type:
+So in the following let's see how that goes and would approaches could be attempted
+and why they ultimately fail.
+
+For all of the following we use this type:
 
 ```
 public class MutableData
@@ -326,8 +328,8 @@ public class MutableData
 }
 ```
 
-In contrast to the immutable variant, this one changes the value held by the current instance,
-when performing the `Add()` method, instead of returning a new instance that represents the
+In contrast to the immutable variant, it changes its internal state, namely the value held by the current
+instance, when performing the `Add()` method, instead of returning a new instance that represents the
 new value.
 
 ## No special treatment
@@ -373,16 +375,17 @@ MutableData  CONCURRENT
 
 Some observations:
 
-* Again, the `updateValueFactory` has been called more times than necessary, which hints at
+* Again, the `updateValueFactory` delegate has been invoked more times than necessary, which hints at
   concurrent attempts to update the value.
 * The actual results are not equal.
  
+So in one word, the result in the concurrent case is *wrong*! This shouldn't of course happen.
+ 
 But shouldn't the concurrent value be _larger_ than the sequential one?
-After all the `updateValueFactory` (and thus `MutableData.Add()`) method
-is called more often.
+After all the `updateValueFactory` (and thus `MutableData.Add()`) delegate is invoked more often
+than in the sequential case.
 
-The reason for this is because of the way that we treat the first every value
-to be inserted.
+The reason for this is because of the way that we treat the first value to be inserted.
 
 Each thread, when calling `AddOrUpdate()` for the first time starts with a new instance
 of `MutableData`, because `addValueFactory` is written as `_ => new MutableData(i)`.
@@ -393,7 +396,7 @@ operates on that _single_ instance.
 
 So while we have in fact "shared data" due to the mutability, the threads don't always
 operate on it. Only when the first entry is actually present in the dictionary, and
-every thread has observed it, it we do.
+every thread has observed it, we do.
 
 If we'd written this instead, where we would have exactly _one_ instance of `MutableData`
 per dictionary entry ever, things would look different.
@@ -405,21 +408,22 @@ var concurrent = TestConcurrent(
         (dict, i) => dict.AddOrUpdate(Key, _ => value, (_, existing) => existing.Add(new MutableData(i))));
 ```
 
-The results would show that the result in the concurrent case _is_ actually higher.
+The results would show that the result in the concurrent case _is_ actually bigger.
 
 That only shows that using mutable data as values is even more involved like only caring for the `updateValueFactory`.
 
 For the purpose of this article - and for symmetry reasons with the other test cases - we leave it with the
-variation of `_ => new MutableData(i)`. In the end we seek to demonstrate that the results are different/wrong,
-and it doesn't really matter in which way they are. More so, if we would find a way to make using
-mutable data correct, it should work in either way anyway.
+variation of `_ => new MutableData(i)`. In the end we seek to demonstrate that the results are different/wrong
+compared to the sequential case, and it doesn't really matter in which way they are. More so, if we would find
+a way to make using mutable data correct, it should work in either way anyway.
 
 ### The Lazy-Trick
 
-As already mentioned in the introduction, there is this so called "Lazy-Trick" when using the
-`GetOrAdd()` method to prevent the `addValueFactory` from being called multiple times.
-Then it is (correctly) used as a means to prevent a potentially expensive operation, the
-work of the `addValueFactory`, being called multiple, times when only one time would suffice.
+As mentioned in the introduction, there is this so called "Lazy-Trick" when using the
+`GetOrAdd()` method to prevent the `addValueFactory` delegate from being invoked multiple times.
+Then it is correctly used as a means to prevent a potentially expensive operation, the
+work of `addValueFactory`, being called multiple times when only one time would suffice or is
+tolerable.
 More information on this technique can be found [here](https://andrewlock.net/making-getoradd-on-concurrentdictionary-thread-safe-using-lazy/) (amongst other places).
 
 Let's look at another example / test:
@@ -471,19 +475,19 @@ MutableData  CONCURRENT
 
 Observations:
 
-* The resulting value is not the same as in the sequential case (smaller, for reasons outlined in
-  the previous chapter, but regardless it is wrong).
-* The number of `updateValueFactory` calls and thus `Add()` methods is different.
+* The resulting value is not the same as in the sequential case (smaller, for reasons outlined 
+  above, but regardless it is wrong).
+* The number of `updateValueFactory` invocations and thus `Add()` methods is different.
 
 Remember that `AddOrUpdate()` uses equality to determine if a value has changed concurrently.
 In this case that would be `Lazy<>.Equals()`, which only works on object identity / reference equality.
-Since we create a new `Lazy<MutableData>` instance for each call to `addValueFactory` and `updateValueFactory`,
-the check inside `AddOrUpdate()` will very often be wrong, and results it much more calls to `updateValueFactory`
-upon the retry logic inside `AddOrUpdate()`, since that mutates the actual `MutableData` instance inside,
-the value of it increases far beyond the expected value.
+Since we create a new `Lazy<MutableData>` instance for each invocation of `addValueFactory` and `updateValueFactory`,
+that equality-check inside `AddOrUpdate()` will very often be false, and results it much more invocations of
+`updateValueFactory` upon the retry logic inside `AddOrUpdate()`. Since that mutates the actual `MutableData`
+instance inside the `Lazy<>`, the value of it increases far beyond the expected value.
 
-Note that the problem would generally be the same, when using other approaches. For example, you could
-think about writing the `updateValueFactory` to return the same `Lazy` instance:
+BTW, the problem would generally be the same, when using variants of this approach. For example, you could
+consider writing the `updateValueFactory` delegate to return the same `Lazy` instance:
 
 ```
     var concurrent = TestConcurrent(
@@ -497,7 +501,7 @@ think about writing the `updateValueFactory` to return the same `Lazy` instance:
 ```
 
 That also doesn't work because we are still mutating the single `MutableData` instance; whether that is
-reference by the same or different `Lazy` instances is irrelevant.
+reference by the same or different `Lazy` instances is irrelevant to the problem.
 
 ### Lazy with custom equality
 
@@ -552,11 +556,6 @@ public void TestMutableData_Fails_With_EqualitySupportLazy()
     PrintSummary<MutableData>(Console.Out, true, concurrent.Value.Value, concurrentAddCalls);
     MutableData.AddCallsCount.Reset();
 
-    // This does not work for the same reasons that using a plain, mutable `MutableData` instance as the
-    // value does not work. We mutate the state of a shared instance due the `updateValueFactory`
-    // being called multiple times.
-    // The fact that we "nicely" wrap that inside a form of Lazy-instance does not help.
-
     Assert.AreNotEqual(sequential.Value.Value, concurrent.Value.Value);
     Assert.AreNotEqual(sequentialAddCalls, concurrentAddCalls);
 }
@@ -571,7 +570,7 @@ MutableData  CONCURRENT
 	 Value: 5.017.329	 Add(): #10.073
 ```
 
-Again, the results don't match and (or because) we have more `updateValueFactory` class then
+Again, the results don't match and we still have more `updateValueFactory` invocations than
 expected. The reason here is the same as with the plain usage of `Lazy<>`: we simply cannot
 account for the fact that a shared `MutableData` instance is changed.
 
@@ -581,7 +580,7 @@ That does _not_ mean that it doesn't have its place. Again, when trying to preve
 unnecessary creation of expensive objects, calling expensive algorithms, etc. It has its
 place in conjunction with the `ConcurrentDictionary<>` type, but only in the context of
 _initially creating_ a value. May that be during `GetOrAdd()` or the `addValueFactory`
-call in the `AddOrUpdate()` case.
+delegate in the `AddOrUpdate()` case.
 
 ### Explicit Locking inside the updateValueFactory
 
@@ -637,12 +636,13 @@ MutableData  CONCURRENT
 ```
 
 The result is almost expected by now. Again the concurrent case produces a wrong result and has some
-more calls to `updateValueFactory` than required - to rinse and repeat: because multiple threads have
-attempted to update the value concurrently and called `updateValueFactory` for each retry.
+more invocations of `updateValueFactory` - to rinse and repeat: because multiple threads have
+attempted to update the value concurrently and invoked `updateValueFactory` for each retry.
 
-Why does this not work? Because the lock _inside_ the `updateValueFactory` can not prevent it
+Why does this not work? Because the lock _inside_ `updateValueFactory` can not prevent it
 from running multiple times for the same `AddOrUpdate()` call. It could protect some sort of
-invariant inside the `MutableData` instance, but cannot help otherwise.
+invariant inside the `MutableData` instance (because it prevents executing two or more
+`updateValueFactory` at the same time), but cannot help otherwise.
 
 ### Making it work
 
@@ -691,10 +691,11 @@ public void TestAdvancedMutableData_Success()
 }
 ```
 
-This shows, that using specific measures, calling `updateValueFactory` multiple times can of course 
-yields correct results. But only because we actively did something to help it. And that is the key
+This shows, that using specific measures, invoking `updateValueFactory` multiple times can
+yield correct results. But only because we actively did something to help it. And that is the key
 here: there is no _universal_ approach to make mutable data work in the `AddOrUpdate()` scenario.
 You have to find a way specific to your particular case.
+
 
 And just to emphasis this point, look what happens if we'd used an immutable data type instead of
 `List<int>`, `ImmutableList<int>`.
@@ -722,40 +723,44 @@ public void TestAdvancedImmutableData_Success()
 ```
 
 Since `ImmutableList<>.Add()` does not add the new element to existing instance, but creates
-a new one, it does not matter how often `updateValueFactory` is called.
+a new one, it does not matter how often `updateValueFactory` runs for a single call to
+`AddOrUpdate()`.
 
 ## Conclusion
 
 So where does that leave us?
 
-One takeaway is that if you have an immutable data structure or value types as value, you're basically
+One takeaway is, if you have an immutable data structure or value types as value, you're basically
 out of the woods.
 
 If mutable data / types are required, extra precaution is needed to keep things correct. How exactly that
-works and if it is feasible at all depends on the actual specific case and there is general solution.
+works and if it is feasible at all depends on the actual specific case and there is no general solution.
 To make things even more interesting, using a `ConcurrentDictionary<>` still works nicely with mutable
-values, if you only ever get or add (`ConcurrentDictionary<>[TKey key]`, `GetOrAdd()`, `TryAdd`),
+values, if you only ever add and retreive entries (`ConcurrentDictionary<>[TKey key]`, `GetOrAdd()`, `TryAdd`),
 remove (`TryRemove()`) or iterate existing entries, but never update them. Why? Because then you really
 treat them as immutable! At least from the point of view of the `ConcurrentDictionary<>`. But this is
 of course rather dangerous. A future maintainer might innocently update values (`AddOrUpdate()` or
-`TryUpdate()`) values in the dictionary and things start to break.
+`TryUpdate()`) in the dictionary and things start to break. And to make things even more unfortunate,
+this introduced error might not even surface immediately because it depends on actual concurrent usage.
 
 Considering all the effort and correctness reasoning required for mutable values, and preventing brittle
 code for future maintenance - even with immutable values - it might worth considering using a plain
 `System.Collections.Generic.Dictionary<>` with explicit locking instead. Then go with that until
 measurement and profiling have proven this to be bottleneck for your scenario.
 
-In either case, there are potential issues with performance, since multiple (unnecessary) calls to `updateValueFactory`
+In either case, there are potential issues with performance, since multiple invokations of `updateValueFactory`
 or `addValueFactory` can and will happen. Whether that is an issue for your scenario depends on how expensive
-these extra calls are and how often they generally will happen. The frequency of such extra calls is
-governed by the level of concurrency and contention that may arise from it. As always in such cases there
-is no universal answer and you have to measure and profile common use cases to find out. Potential problems
-in this regard can still be addressed using value wrapped in `Lazy<>`. As shown above this does not help
-with the issues of mutable data, but can reduce or prevent extra (expensive) calls. Wrapping a value into
-`Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes (64 bit; it uses
-some more until the value is first requested for the `valueFactory` delegate and some internal state, but
-that will be subject to GC when the value has been requested). If you have literally millions of values
-in your dictionary that might add up, but again: profile and measure before drawing conclusions here.
+these extra invocations are and how often they generally will happen. The frequency is governed by the level of
+concurrency and contention that may arise from it. 
+
+There is no universal answer and you have to measure and profile common use cases to find out.
+Potential problems in this regard can still be addressed using value wrapped in `Lazy<>`. 
+As shown above this does not help with the issues of mutable data, but can reduce or prevent extra (expensive) calls.
+Wrapping a value into `Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes
+(on 64 bit architectures; it uses some more bytes until the held value is created for the `valueFactory` delegate
+and some internal state, but that will be subject to GC when the value has been requested).
+If you have literally millions of values in your dictionary that might add up, but again:
+profile and measure before drawing conclusions here.
 
 As so often in software development there seldom is a universal right choice and such is the case here
 as well. This article thus attempted to outline some of the issues involved and give some guidance and
