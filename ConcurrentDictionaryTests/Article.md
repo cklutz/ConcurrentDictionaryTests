@@ -131,13 +131,30 @@ So let's delve into details and see how it goes.
 
 ## Immutable Data
 
-Immutable data (structures) and multi threading mix well. There's quite some information on this
-topic on the Internet and searching will yield a multitude of useful information. Thus we'll not
-go into the theory in detail here.
+Immutable data structure/object/type is, simply put, an entity who's state cannot be modified
+after it is created. There is no shared state that could be concurrently modified by multiple
+threads. That makes them predestinated for use in multi threaded situations and for concurrent
+access.
 
-In the case of `AddOrUpdate()` immutable values in the dictionary are super helpful. It doesn't
-matter how often `updateValueFactory` is executed before the returned value is actually inserted
-(or updated) into the dictionary, because each call is side-effect free.
+A typical example of an immutable type in .NET is `System.String`. You cannot change the content
+of an existing string instance. If, say, on string is appended to another `"x" + "y"`, a new
+string instance (`"xy"`) is created. Thus a thread that holds a reference to the `"x"` instance
+will never see that change - which is good. Compare that with a `System.Text.StringBuilder`:
+if something is appended to a string builder instance, it changes _that_ instance. So any thread
+that has a reference to that instance will observe this change - whether it wants to or not. Thus,
+explicit locking is required to make sure such changes are observed consistently or even that the
+type in question does not break its internal invariants in the face of multiple threads.
+
+Related to that, immutable data is also very useful because the original value never changes.
+For example, assuming you have a `System.DateTime` (which is a nother example of an immutable type
+in the BCL) set to the 25th of June. You can use `System.DataTime.AddDays(1)` to get the 26th as a
+_new_ `System.DateTime` instance. The original instance never changes. Regardless how often you
+perform that operation on it, it never will.
+
+In the case of `AddOrUpdate()` immutable values in the dictionary are thus super helpful. It doesn't
+matter how often `updateValueFactory` is invoked before the returned value is actually inserted
+(or updated) into the dictionary, because each call is side-effect free with regards to the value
+itself.
 
 A very simple example is this:
 
@@ -148,9 +165,12 @@ A very simple example is this:
    }
 ```
 
-The `updateValueFactory` is the lambda expression `(key, current) => current += 2`.
+The `updateValueFactory` delegate is the lambda expression `(key, current) => current += 2`.
 In other words updating the entry's value is the operation of adding `2` to its current
-value. Assume that the `Test()` method is called concurrently by multiple threads.
+value.
+
+Now, assume that the `Test()` method is called concurrently by multiple threads
+(also consider the basic algorithm of `AddOrUpdate()` shown in the introduction).
 
 - At the start the dictionary does not contain an entry for "key".
 - Thread #1 calls `AddOrUpdate()` and will determine that there is no entry,
@@ -159,13 +179,13 @@ value. Assume that the `Test()` method is called concurrently by multiple thread
   entry, thus creating it. Then it is preempted.
   (current entry value: 1)
 - Thread #1 resumes and will attempt to add the entry. That fails, because meanwhile
-  the entry is already present (added by thread #2). It will thus loop and go into
+  the entry is already present (added by thread #2). It will thus retry and go into
   the update-entry logic case; determines "oldValue" to be "1".
-  It will execute `updateValueFactory` and keep the result as "newValue" on the thread stack.
+  It will invoke `updateValueFactory` and keep the result as "newValue" on the thread stack.
   Then it is preempted.
   (thread #1: oldValue: 1)
   (thread #1: newValue: 2)
-- Thread #3 calls `AddOrUpdate()`, sees that the entry exists, calls `updateValueFactory`
+- Thread #3 calls `AddOrUpdate()`, sees that the entry exists, invokes `updateValueFactory`
   and also succeeds to update the actual value.
   (current entry value: 2)
 - Thread #1 resumes and continues by acquiring the lock for the entry. It then checks
@@ -179,22 +199,15 @@ value. Assume that the `Test()` method is called concurrently by multiple thread
   Assuming no other thread intervenes or interrupts, the current value is finally
   updated to "3" by thread #1.
 
-In the example above, the `updateValueFactory` method is called _twice_ by thread #1
+In the example above, the `updateValueFactory` delegate is invoked _twice_ by thread #1
 in the quest to perform _one_ (logical) update. Since each Int32 operation returns a
 new value ("instance") this does not matter, as the result of the operation is always
-consistent (the second call to `updateValueFactory` yields the correct result of "3").
+consistent (the second invokation of `updateValueFactory` yields the correct result of "3").
 
-Immutable in this case basically means that the result of an operation does not change
-the internal state of the _existing_ instance, but rather creates a new one. Again,
-there is a lot of good material available on immutable data structures (and yes, even
-`System.Int32` counts as such along with `System.String`, doesn't have to be too complicated).
-so we won't go into more details here. However, recall the above example, for exemplary
-purposes, how multiple calls of the `updateValueFactory` delegate could happen for a single
-`AddOrUpdate()` call.
+Using built-in value types like `Int32`, `DateTime`, `Char` or even selected reference types like
+`String` just works. But what about user defined types.
 
-Using built-in value types like `Int32` or `String` just works. But what about user defined types.
-Well, if you can at all, make them immutable. This will have benefit in many multi-threaded
-situations.
+If you can at all, make them immutable. This will have benefit in many multi-threaded situations.
 
 For example, consider this type:
 
@@ -214,23 +227,26 @@ public class ImmutableData
 
 That is of course a rather useless type - we could have easily just used `int` instead.
 Technically, there is no need for this wrapper. But then, this class should only serve
-as an example for demonstration purposes. Also note, that if this type would indeed be
-useful as it is, it should probably not be a `class` but rather a `struct` or even better
-a `readonly struct` to emphasis the point of being a value type and an immutable value type.
+as an example for demonstration purposes, so please bear with me. Also note, that if this
+type would indeed be useful as it is, it should probably not be a `class` but rather a `struct`
+or even better a `readonly struct` to emphasis and enforce the point of being a value type and
+an immutable value type.
 
 However, for the workings in conjunction with the `ConcurrentDictionary<>` this makes no
 difference, so we simply go with `class`.
 
-Consider the following test. `TestSequential` will run the `AddOrUpdate()` calls sequentially,
+Consider the following test: `TestSequential` will run the `AddOrUpdate()` calls sequentially,
 whereas `TestConcurrent` will run them using multiple tasks concurrently (for more details checkout
-the actual [code](https://github.com/cklutz/ConcurrentDictionaryTests). Obviously, if everything
+the actual [code](https://github.com/cklutz/ConcurrentDictionaryTests)). Obviously, if everything
 is correct, the results (the value of the single entry for key `Key` we update), should be
 identical, i.e. `sequential.Value == concurrent.Value`.
 
-Both sequential and concurrent runs call the `AddOrUpdate()` method 10.000 times in total.
-Note that this code also counts the number of total calls to `ImmutableData.Add()` across all
+Both, `TestSequential` and `TestConcurrent`, run the `AddOrUpdate()` method 10.000 times in total.
+
+The test code also counts the number of total calls to `ImmutableData.Add()` across all
 instances (using the static `ImmutableData.AddCallsCount` member).
-This helps understand how often the `updateValueFactory` method is actually called.
+This helps understand how often the `updateValueFactory` method is actually called for each case,
+and will help us highlight the behaviour of `AddOrUpdate()` in multi threaded and contented cases.
 
 ```
 [TestMethod]
@@ -269,13 +285,19 @@ ImmutableData  CONCURRENT
 Some observations:
 
 * The resulting values match.
-* The concurrent code executed `updateValueFactory` more often than the sequential code
-  (in fact, the sequential code executed it exactly 9.999 times, which is one less than
+* The concurrent code invoked `updateValueFactory` more often than the sequential code
+  (in fact, the sequential code invoked it exactly 9.999 times, which is one less than
    the total number of `AddOrUpdate()` calls scheduled: 10.000. This is because the
-   sequential code calls the `addValueFactory` code exactly once when the entry does
+   sequential code invokes the `addValueFactory` delegate exactly once when the entry does
    not exist and then the remaining 10.000 - 1 calls to update the existing value.)
-  The results of the "excess" `updateValueFactory` calls have been discarded and didn't
-  change the overall result because the actual value of the entry is not affected by them.
+  The results of the "excess" `updateValueFactory` invocations have been discarded and didn't
+  change the overall result because the actual value of the entry is not affected by them
+  (=> immutability of the value's type).
+
+There are some performance considerations here, which we'll shortly tackle in the
+conclusion of this article, but generally everything is fine here.
+
+If that would be all there is to it, things would be great an live would be easy.
 
 ## Mutable Data
 
