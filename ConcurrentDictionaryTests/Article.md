@@ -43,7 +43,7 @@ Note that for the sake of this article the term "calls `updateValueFactory` meth
 invoking the `updateValueFactory` delegate and thus ultimately the code that it calls.
 
 Let's start by looking into how `AddOrUpdate()` operates [internally](https://source.dot.net/#System.Collections.Concurrent/System/Collections/Concurrent/ConcurrentDictionary.cs,2e5ef5704344a309).
-The following steps are performed repeatedly until one succeeds (or an exception occurrs).
+The following steps are performed repeatedly until one succeeds (or an exception occurs).
 There are two cases to consider: either the entry already exists, or it does not.
 
 1. If the entry does not exist, the equivalent of `TryAdd()` is attempted.
@@ -61,7 +61,7 @@ There are two cases to consider: either the entry already exists, or it does not
 2.2. For the key a lock is acquired. This lock is not distinct for each key - that would be
      quite wasteful for large dictionaries. As with most dictionary implementations a key
      belongs to a bucket and each bucket has its own lock. That ensures at least some
-     concurrency when actually updating entries, as not the complete dictionary is locked,
+     concurrency when updating entries, as not the complete dictionary is locked,
      but only certain ranges of entries (depending on how keys that are being handled
      simultaneously are distributed).
 
@@ -74,10 +74,10 @@ There are two cases to consider: either the entry already exists, or it does not
        meantime the entry could have been removed by another thread, so that step 1. would be
        the right thing to attempt next.
 
-2.3.2. If the values do match, then no concurrent modification has happened and it is safe to
+2.3.2. If the values do match, then no concurrent modification has happened, and it is safe to
        replace the current value of the entry (again, which still is "oldValue") with "newValue".
        There are some optimizations about values that are atomic in assignment (e.g `int`), but
-       generally the logic is the same.
+       generally, the logic is the same.
 
 The key takeaway is the following:
 
@@ -87,7 +87,7 @@ holding this lock.
 
 Since the whole procedure could be executed many times for the same key and the same `AddOrUpdate()`
 call site - due to contention of multiple threads executing in parallel, the `updateValueFactory`
-delegate could be invoked multiple times before the resulting value is actually inserted (or added)
+delegate could be invoked multiple times before the resulting value is inserted (or added)
 into the dictionary.
 
 This is spelled out in the "Remarks" section of the [`AddOrUpdate()`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate?view=net-5.0) documentation:
@@ -108,11 +108,11 @@ What about the `addValueFactory`?
 As can be seen by the documentation citation above, the `addValueFactory` delegate could also
 be invoked multiple times for a single `AddOrUpdate()` call. We won't look at this issue here
 in particular. For once, the basic problems are the same as with the `updateValueFactory` and
-also because issues there are also explained with the 
+also, because issues there are also explained with the 
 various material about `GetOrAdd()` on the Internet.
 
 Another thing to note is that the way of checking two values for equality should be well defined
-(see 2.3.1 above), because that is how `ConcurrentDictionary<>` decides if a values has changed.
+(see 2.3.1 above), because that is how `ConcurrentDictionary<>` decides if a value has changed.
 If you simply use default `Object.Equals()` for a reference type (`class`), then of course only
 the exact same instance will count as being equal. Which may or not may be what you want. If you
 use a value type as a value, then equality will be defined by "value equality", but for custom
@@ -127,33 +127,33 @@ The code for this article is available on [Github](https://github.com/cklutz/Con
 in the form of Unit Tests. To fully understand, you should also look at the output (`Console.Out`) of
 each test, as it includes additional information.
 
-So let's delve into details and see how it goes. 
+So, let's delve into details and see how it goes. 
 
 ## Immutable Data
 
-Immutable data structure/object/type is, simply put, an entity who's state cannot be modified
+Immutable data structure/object/type is, simply put, an entity whose state cannot be modified
 after it is created. There is no shared state that could be concurrently modified by multiple
-threads. That makes them predestinated for use in multi threaded situations and for concurrent
+threads. That makes them predestinated for use in multi-threaded situations and for concurrent
 access.
 
 A typical example of an immutable type in .NET is `System.String`. You cannot change the content
 of an existing string instance. If, say, on string is appended to another `"x" + "y"`, a new
-string instance (`"xy"`) is created. Thus a thread that holds a reference to the `"x"` instance
+string instance (`"xy"`) is created. Thus, a thread that holds a reference to the `"x"` instance
 will never see that change - which is good. Compare that with a `System.Text.StringBuilder`:
-if something is appended to a string builder instance, it changes _that_ instance. So any thread
+if something is appended to a string builder instance, it changes _that_ instance. Any thread
 that has a reference to that instance will observe this change - whether it wants to or not. Thus,
 explicit locking is required to make sure such changes are observed consistently or even that the
 type in question does not break its internal invariants in the face of multiple threads.
 
 Related to that, immutable data is also very useful because the original value never changes.
-For example, assuming you have a `System.DateTime` (which is a nother example of an immutable type
+For example, assuming you have a `System.DateTime` (which is another example of an immutable type
 in the BCL) set to the 25th of June. You can use `System.DataTime.AddDays(1)` to get the 26th as a
 _new_ `System.DateTime` instance. The original instance never changes. Regardless how often you
 perform that operation on it, it never will.
 
 In the case of `AddOrUpdate()` immutable values in the dictionary are thus super helpful. It doesn't
-matter how often `updateValueFactory` is invoked before the returned value is actually inserted
-(or updated) into the dictionary, because each call is side-effect free with regards to the value
+matter how often `updateValueFactory` is invoked before the returned value is inserted
+(or updated) into the dictionary because each call is side-effect free with regards to the value
 itself.
 
 A very simple example is this:
@@ -166,7 +166,7 @@ A very simple example is this:
 ```
 
 The `updateValueFactory` delegate is the lambda expression `(key, current) => current += 2`.
-In other words updating the entry's value is the operation of adding `2` to its current
+In other words, updating the entry's value is the operation of adding `2` to its current
 value.
 
 Now, assume that the `Test()` method is called concurrently by multiple threads
@@ -189,7 +189,7 @@ Now, assume that the `Test()` method is called concurrently by multiple threads
   and also succeeds to update the actual value.
   (current entry value: 2)
 - Thread #1 resumes and continues by acquiring the lock for the entry. It then checks
-  the current value again and observes that "2" != "1". Thus a concurrent modification
+  the current value again and observes that "2" != "1". Thus, a concurrent modification
   has happened and it needs to retry from the beginning.
   Upon retry the thread again determines that the entry exists, with value "2",
   it thus calls `updateValueFactory` again, now getting "3" as "newValue".
@@ -227,7 +227,7 @@ public class ImmutableData
 
 That is of course a rather useless type - we could have easily just used `int` instead.
 Technically, there is no need for this wrapper. But then, this class should only serve
-as an example for demonstration purposes, so please bear with me. Also note, that if this
+as an example, for demonstration purposes, so please bear with me. Also note, that if this
 type would indeed be useful as it is, it should probably not be a `class` but rather a `struct`
 or even better a `readonly struct` to emphasis and enforce the point of being a value type and
 an immutable value type.
@@ -245,8 +245,8 @@ Both, `TestSequential` and `TestConcurrent`, run the `AddOrUpdate()` method 10.0
 
 The test code also counts the number of total calls to `ImmutableData.Add()` across all
 instances (using the static `ImmutableData.AddCallsCount` member).
-This helps understand how often the `updateValueFactory` method is actually called for each case,
-and will help us highlight the behaviour of `AddOrUpdate()` in multi threaded and contented cases.
+This helps understand how often the `updateValueFactory` method is called for each case,
+and will help us highlight the behavior of `AddOrUpdate()` in multi-threaded and contented cases.
 
 ```
 [TestMethod]
@@ -297,13 +297,13 @@ Some observations:
 There are some performance considerations here, which we'll shortly tackle in the
 conclusion of this article, but generally everything is fine.
 
-If that would be all there is to it, things would be great an live would be easy.
+If that would be all there is to it, things would be great and live would be easy.
 
 ## Mutable Data
 
-Things could be wonderful, if there were no mutable data/types. But there are.
+Things could be wonderful if there were no mutable data/types. But there are.
 
-So in the following let's see how that goes and would approaches could be attempted
+In the following let's see how that goes and would approaches could be attempted
 and why they ultimately fail.
 
 For all of the following we use this type:
@@ -379,7 +379,7 @@ Some observations:
   concurrent attempts to update the value.
 * The actual results are not equal.
  
-So in one word, the result in the concurrent case is *wrong*! This shouldn't of course happen.
+In one word, the result in the concurrent case is *wrong*! This shouldn't of course happen.
  
 But shouldn't the concurrent value be _larger_ than the sequential one?
 After all the `updateValueFactory` (and thus `MutableData.Add()`) delegate is invoked more often
@@ -391,11 +391,11 @@ Each thread, when calling `AddOrUpdate()` for the first time starts with a new i
 of `MutableData`, because `addValueFactory` is written as `_ => new MutableData(i)`.
 
 However, only one of those instances will ultimately be the one that is finally inserted
-as the "first" one. All others will be discarded and from then on the `updateValueFactory`
+as the "first" one. All others will be discarded and from then on, the `updateValueFactory`
 operates on that _single_ instance.
 
-So while we have in fact "shared data" due to the mutability, the threads don't always
-operate on it. Only when the first entry is actually present in the dictionary, and
+While we have in fact "shared data" due to the mutability, the threads don't always
+operate on it. Only when the first entry is present in the dictionary, and
 every thread has observed it, we do.
 
 If we'd written this instead, where we would have exactly _one_ instance of `MutableData`
@@ -408,20 +408,20 @@ var concurrent = TestConcurrent(
         (dict, i) => dict.AddOrUpdate(Key, _ => value, (_, existing) => existing.Add(new MutableData(i))));
 ```
 
-The results would show that the result in the concurrent case _is_ actually bigger.
+The results would show that the result in the concurrent case _is_ bigger.
 
 That only shows that using mutable data as values is even more involved like only caring for the `updateValueFactory`.
 
-For the purpose of this article - and for symmetry reasons with the other test cases - we leave it with the
+For this article - and for symmetry reasons with the other test cases - we leave it with the
 variation of `_ => new MutableData(i)`. In the end we seek to demonstrate that the results are different/wrong
-compared to the sequential case, and it doesn't really matter in which way they are. More so, if we would find
+compared to the sequential case, and it doesn't really matter in which way they are. More so if we would find
 a way to make using mutable data correct, it should work in either way anyway.
 
 ### The Lazy-Trick
 
 As mentioned in the introduction, there is this so called "Lazy-Trick" when using the
 `GetOrAdd()` method to prevent the `addValueFactory` delegate from being invoked multiple times.
-Then it is correctly used as a means to prevent a potentially expensive operation, the
+Then it is correctly used to prevent a potentially expensive operation, the
 work of `addValueFactory`, being called multiple times when only one time would suffice or is
 tolerable.
 More information on this technique can be found [here](https://andrewlock.net/making-getoradd-on-concurrentdictionary-thread-safe-using-lazy/) (amongst other places).
@@ -500,7 +500,7 @@ consider writing the `updateValueFactory` delegate to return the same `Lazy` ins
             }));
 ```
 
-That also doesn't work because we are still mutating the single `MutableData` instance; whether that is
+That also doesn't work because we are still mutating the single `MutableData` instance, whether that is
 reference by the same or different `Lazy` instances is irrelevant to the problem.
 
 ### Lazy with custom equality
@@ -570,7 +570,7 @@ MutableData  CONCURRENT
 	 Value: 5.017.329	 Add(): #10.073
 ```
 
-Again, the results don't match and we still have more `updateValueFactory` invocations than
+Again, the results don't match, and we still have more `updateValueFactory` invocations than
 expected. The reason here is the same as with the plain usage of `Lazy<>`: we simply cannot
 account for the fact that a shared `MutableData` instance is changed.
 
@@ -635,19 +635,19 @@ MutableData  CONCURRENT
 	 Value: 5.017.839	 Add(): #10.050
 ```
 
-The result is almost expected by now. Again the concurrent case produces a wrong result and has some
+The result is almost expected by now. Again, the concurrent case produces a wrong result and has some
 more invocations of `updateValueFactory` - to rinse and repeat: because multiple threads have
 attempted to update the value concurrently and invoked `updateValueFactory` for each retry.
 
-Why does this not work? Because the lock _inside_ `updateValueFactory` can not prevent it
+Why does this not work? Because the lock _inside_ `updateValueFactory` cannot prevent it
 from running multiple times for the same `AddOrUpdate()` call. It could protect some sort of
 invariant inside the `MutableData` instance (because it prevents executing two or more
-`updateValueFactory` at the same time), but cannot help otherwise.
+`updateValueFactory` at the same time) but cannot help otherwise.
 
 ### Making it work
 
-For example consider a value of type `List<int>`, obviously that type is mutable. When we add
-new values to the list it changes the current instance itself.
+For example, consider a value of type `List<int>`, obviously that type is mutable. When we add
+new values to the list, it changes the current instance itself.
 
 ```
 [TestMethod]
@@ -736,10 +736,10 @@ out of the woods.
 If mutable data / types are required, extra precaution is needed to keep things correct. How exactly that
 works and if it is feasible at all depends on the actual specific case and there is no general solution.
 To make things even more interesting, using a `ConcurrentDictionary<>` still works nicely with mutable
-values, if you only ever add and retreive entries (`ConcurrentDictionary<>[TKey key]`, `GetOrAdd()`, `TryAdd`),
+values, if you only ever add and retrieve entries (`ConcurrentDictionary<>[TKey key]`, `GetOrAdd()`, `TryAdd`),
 remove (`TryRemove()`) or iterate existing entries, but never update them. Why? Because then you really
 treat them as immutable! At least from the point of view of the `ConcurrentDictionary<>`. But this is
-of course rather dangerous. A future maintainer might innocently update values (`AddOrUpdate()` or
+of course, rather dangerous. A future maintainer might innocently update values (`AddOrUpdate()` or
 `TryUpdate()`) in the dictionary and things start to break. And to make things even more unfortunate,
 this introduced error might not even surface immediately because it depends on actual concurrent usage.
 
@@ -748,16 +748,16 @@ code for future maintenance - even with immutable values - it might worth consid
 `System.Collections.Generic.Dictionary<>` with explicit locking instead. Then go with that until
 measurement and profiling have proven this to be bottleneck for your scenario.
 
-In either case, there are potential issues with performance, since multiple invokations of `updateValueFactory`
+In either case, there are potential issues with performance, since multiple invocations of `updateValueFactory`
 or `addValueFactory` can and will happen. Whether that is an issue for your scenario depends on how expensive
 these extra invocations are and how often they generally will happen. The frequency is governed by the level of
 concurrency and contention that may arise from it. 
 
-There is no universal answer and you have to measure and profile common use cases to find out.
+There is no universal answer, and you have to measure and profile common use cases to find out.
 Potential problems in this regard can still be addressed using value wrapped in `Lazy<>`. 
-As shown above this does not help with the issues of mutable data, but can reduce or prevent extra (expensive) calls.
+As shown above this does not help with the issues of mutable data but can reduce or prevent extra (expensive) calls.
 Wrapping a value into `Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes
-(on 64 bit architectures; it uses some more bytes until the held value is created for the `valueFactory` delegate
+(on 64-bit architectures; it uses some more bytes until the held value is created for the `valueFactory` delegate
 and some internal state, but that will be subject to GC when the value has been requested).
 If you have literally millions of values in your dictionary that might add up, but again:
 profile and measure before drawing conclusions here.
@@ -765,6 +765,3 @@ profile and measure before drawing conclusions here.
 As so often in software development there seldom is a universal right choice and such is the case here
 as well. This article thus attempted to outline some of the issues involved and give some guidance and
 hints. As always YMMV.
-
-
-
