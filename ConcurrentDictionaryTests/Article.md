@@ -301,7 +301,7 @@ If that would be all there is to it, things would be great and live would be eas
 
 Things could be wonderful if there were no mutable data/types. But there are.
 
-In the following let's see how that goes and would approaches could be attempted
+In the following let's see how that goes and what approaches could be attempted
 and why they ultimately fail.
 
 For all of the following we use this type:
@@ -326,9 +326,8 @@ public class MutableData
 }
 ```
 
-In contrast to the immutable variant, it changes its internal state, namely the value held by the current
-instance, when performing the `Add()` method, instead of returning a new instance that represents the
-new value.
+When calling the `Add()` method, this one changes its internal state, namely the value held by the current
+instance and then returns the current instance, in contrast to the immutable variant that returns a new instance that holds the new value.
 
 ## No special treatment
 
@@ -574,7 +573,7 @@ account for the fact that a shared `MutableData` instance is changed.
 
 In the end, the whole `Lazy<>` trickery adds nothing to the problem at all.
 
-That does _not_ mean that it doesn't have its place. Again, when trying to prevent to the
+That does _not_ mean that it doesn't have its place, like for example, when trying to prevent to the
 unnecessary creation of expensive objects, calling expensive algorithms, etc. It has its
 place in conjunction with the `ConcurrentDictionary<>` type, but only in the context of
 _initially creating_ a value. May that be during `GetOrAdd()` or the `addValueFactory`
@@ -744,17 +743,17 @@ this introduced error might not even surface immediately because it depends on a
 Considering all the effort and correctness reasoning required for mutable values, and preventing brittle
 code for future maintenance - even with immutable values - it might worth considering using a plain
 `System.Collections.Generic.Dictionary<>` with explicit locking instead. Then go with that until
-measurement and profiling have proven this to be bottleneck for your scenario.
+measurement and profiling have proven this to be a bottleneck for your scenario.
 
 In either case, there are potential issues with performance, since multiple invocations of `updateValueFactory`
 or `addValueFactory` can and will happen. Whether that is an issue for your scenario depends on how expensive
 these extra invocations are and how often they generally will happen. The frequency is governed by the level of
 concurrency and contention that may arise from it. 
 
-There is no universal answer, and you have to measure and profile common use cases to find out.
-Potential problems in this regard can still be addressed using value wrapped in `Lazy<>`. 
-As shown above this does not help with the issues of mutable data but can reduce or prevent extra (expensive) calls.
-Wrapping a value into `Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes
+There is no universal answer, and you have to measure and profile common use cases to find out potential problems.
+Some potential problems can still be addressed using value wrapped in `Lazy<>`. 
+As shown above, this does not help with the issues of mutable data but can reduce or prevent extra (expensive) calls.
+However, wrapping a value into `Lazy<>` will add memory cost. In the long run each `Lazy<>` instance requires 24 bytes
 (on 64-bit architectures; it uses some more bytes until the held value is created for the `valueFactory` delegate
 and some internal state, but that will be subject to GC when the value has been requested).
 If you have literally millions of values in your dictionary that might add up, but again:
