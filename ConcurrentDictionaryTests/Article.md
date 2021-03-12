@@ -11,7 +11,7 @@ will cause correctness issues that are hard to find.
 Reasoning about correctness in multi-threaded or concurrent scenarios is hard.
 That is why existing and tested data structures that promise simple solutions are so appealing.
 
-One of those data structures that is both appealing and, if not fully understood, hideous is the
+One of those data structures that is both appealing and, if not fully understood, hideous, is the
 [`System.Collections.Concurrent.ConcurrentDictionary`](https://docs.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2?view=net-5.0)
 class.
 
@@ -210,6 +210,7 @@ If you can at all, make them immutable. This will have benefit in many multi-thr
 For example, consider this type:
 
 ```
+/// As an alternative to immutable data class, the new record type could be used maybe?
 public class ImmutableData
 {
     public ImmutableData(int value)
@@ -227,7 +228,7 @@ That is of course a rather useless type - we could have easily just used `int` i
 Technically, there is no need for this wrapper. But then, this class should only serve
 as an example, for demonstration purposes, so please bear with me. Also note, that if this
 type would indeed be useful as it is, it should probably not be a `class` but rather a `struct`
-or even better a `readonly struct` to emphasis and enforce the point of being a value type and
+or even better a `readonly struct` to emphasize and enforce the point of being a value type and
 an immutable value type.
 
 However, for the workings in conjunction with the `ConcurrentDictionary<>` this makes no
@@ -694,7 +695,7 @@ here: there is no _universal_ approach to make mutable data work in the `AddOrUp
 You have to find a way specific to your particular case.
 
 
-And just to emphasis this point, look what happens if we'd used an immutable data type instead of
+And just to emphasize this point, look what happens if we'd used an immutable data type instead of
 `List<int>`, `ImmutableList<int>`.
 
 ```
