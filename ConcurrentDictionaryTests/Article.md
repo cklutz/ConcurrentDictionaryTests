@@ -210,7 +210,6 @@ If you can at all, make them immutable. This will have benefit in many multi-thr
 For example, consider this type:
 
 ```
-/// As an alternative to immutable data class, the new record type could be used maybe?
 public class ImmutableData
 {
     public ImmutableData(int value)
@@ -229,7 +228,9 @@ Technically, there is no need for this wrapper. But then, this class should only
 as an example, for demonstration purposes, so please bear with me. Also note, that if this
 type would indeed be useful as it is, it should probably not be a `class` but rather a `struct`
 or even better a `readonly struct` to emphasize and enforce the point of being a value type and
-an immutable value type.
+an immutable value type. Also, since C#9 you could also consider using the new
+[record type](https://docs.microsoft.com/en-us/dotnet/csharp/tutorials/exploration/records), which
+is immutable by default.
 
 However, for the workings in conjunction with the `ConcurrentDictionary<>` this makes no
 difference, so we simply go with `class`.
