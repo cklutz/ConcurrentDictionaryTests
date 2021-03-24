@@ -172,7 +172,7 @@ Now, assume that the `Test()` method is called concurrently by multiple threads
 
 - At the start the dictionary does not contain an entry for "key".
 - Thread #1 calls `AddOrUpdate()` and will determine that there is no entry,
-  after that its quantum is used, it is prempted and another thread runs.
+  after that its quantum is used, it is preempted and another thread runs.
 - Thread #2 calls `AddOrUpdate()` and will also determine that there is no
   entry, thus creating it. Then it is preempted.
   (current entry value: 1)
@@ -203,7 +203,7 @@ new value ("instance") this does not matter, as the result of the operation is a
 consistent (the second invokation of `updateValueFactory` yields the correct result of "5").
 
 Using built-in value types like `Int32`, `DateTime`, `Char` or even selected reference types like
-`String` just works. But what about user defined types.
+`String` just works. But what about user defined types?
 
 If you can at all, make them immutable. This will have benefit in many multi-threaded situations.
 
