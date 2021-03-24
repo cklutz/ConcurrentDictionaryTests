@@ -129,14 +129,14 @@ So, let's delve into details and see how it goes.
 
 ## Immutable Data
 
-A immutable data structure/object/type is, simply put, an entity whose state cannot be modified
+An immutable data structure/object/type is, simply put, an entity whose state cannot be modified
 after it is created. There is no shared state that could be concurrently modified by multiple
 threads. That makes them predestinated for use in multi-threaded situations and for concurrent
 access.
 
 A typical example of an immutable type in .NET is `System.String`. You cannot change the content
 of an existing string instance. If, say, one string is appended to another `"x" + "y"`, a new
-string instance (`"xy"`) is created. Thus, a thread that holds a reference to the `"x"` instance
+string instance with content `"xy"` is created. Thus, a thread that holds a reference to the `"x"` instance
 will never see that change - which is good. Compare that with a `System.Text.StringBuilder`:
 if something is appended to a string builder instance, it changes _that_ instance. Any thread
 that has a reference to that instance will observe this change - whether it wants to or not. Thus,
@@ -145,7 +145,7 @@ type in question does not break its internal invariants in the face of multiple 
 
 Related to that, immutable data is also very useful because the original value never changes.
 For example, assuming you have a `System.DateTime` (which is another example of an immutable type
-in the BCL) set to the 25th of June. You can use `System.DataTime.AddDays(1)` to get the 26th as a
+in the BCL) set to the 25th of June. You can use `System.DateTime.AddDays(1)` to get the 26th as a
 _new_ `System.DateTime` instance. The original instance never changes. Regardless how often you
 perform that operation on it, it never will change.
 
