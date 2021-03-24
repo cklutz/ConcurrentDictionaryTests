@@ -1,3 +1,5 @@
+# Correctly using ConcurrentDictionary's AddOrUpdate method 
+
 ## Introduction 
 
 It is important to understand the data structures you are using. It sounds
@@ -45,6 +47,37 @@ invoking the `updateValueFactory` delegate and thus ultimately the code that it 
 Let's start by looking into how `AddOrUpdate()` operates [internally](https://source.dot.net/#System.Collections.Concurrent/System/Collections/Concurrent/ConcurrentDictionary.cs,1317).
 The following steps are performed repeatedly until one succeeds (or an exception occurs).
 There are two cases to consider: either the entry already exists, or it does not.
+
+```
+public TValue AddOrUpdate(TKey key, Func<TKey, TValue> addValueFactory, Func<TKey, TValue, TValue> updateValueFactory)
+{
+    // parameter checking elided.
+
+    IEqualityComparer<TKey>? comparer = _comparer;
+    int hashcode = comparer is null ? key.GetHashCode() : comparer.GetHashCode(key);
+
+    while (true)
+    {
+        if (TryGetValueInternal(key, hashcode, out TValue? oldValue))
+        {
+            // key exists, try to update
+            TValue newValue = updateValueFactory(key, oldValue);
+            if (TryUpdateInternal(key, hashcode, newValue, oldValue))
+            {
+                return newValue;
+            }
+        }
+        else
+        {
+            // key doesn't exist, try to add
+            if (TryAddInternal(key, hashcode, addValueFactory(key), updateIfExists: false, acquireLock: true, out TValue resultingValue))
+            {
+                return resultingValue;
+            }
+        }
+    }
+}
+```
 
 1. If the entry does not exist, the equivalent of `TryAdd()` is attempted.
 
@@ -203,7 +236,7 @@ new value ("instance") this does not matter, as the result of the operation is a
 consistent (the second invokation of `updateValueFactory` yields the correct result of "5").
 
 Using built-in value types like `Int32`, `DateTime`, `Char` or even selected reference types like
-`String` just works. But what about user defined types?
+`String` just work. But what about user defined types?
 
 If you can at all, make them immutable. This will have benefit in many multi-threaded situations.
 
